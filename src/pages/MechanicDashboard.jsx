@@ -1,235 +1,219 @@
 import { useEffect, useState } from "react";
-import { collection, onSnapshot, doc, updateDoc } from "firebase/firestore";
+import {
+    collection,
+    query,
+    where,
+    onSnapshot,
+    doc,
+    updateDoc,
+    orderBy,
+    getDoc,
+} from "firebase/firestore";
 import { db, auth } from "../services/firebase";
+import { CheckCircle, XCircle, Wrench, MapPin } from "lucide-react";
 
 export default function MechanicDashboard() {
     const [requests, setRequests] = useState([]);
-    const [activeJob, setActiveJob] = useState(null);
-    const [earnings, setEarnings] = useState(0); // 💰 NEW
+    const [loading, setLoading] = useState(true);
+    const [updatingId, setUpdatingId] = useState(null);
 
-    // 🔥 REAL-TIME FETCH
+    // 🔥 FETCH REQUESTS
     useEffect(() => {
-        const unsubscribe = onSnapshot(collection(db, "requests"), (snapshot) => {
-            const data = snapshot.docs.map((doc) => ({
-                id: doc.id,
-                ...doc.data(),
-            }));
+        let unsubscribeSnapshot;
 
-            const currentUser = auth.currentUser;
-
-            // ✅ SHOW ONLY PENDING
-            setRequests(data.filter((req) => req.status === "pending"));
-
-            if (currentUser) {
-                // ✅ ACTIVE JOB
-                const myJob = data.find(
-                    (req) =>
-                        req.status === "accepted" &&
-                        req.mechanicId === currentUser.uid
-                );
-                setActiveJob(myJob || null);
-
-                // 💰 REAL EARNINGS CALCULATION
-                const completedJobs = data.filter(
-                    (req) =>
-                        req.mechanicId === currentUser.uid &&
-                        req.status === "completed" &&
-                        req.paymentStatus === "paid"
-                );
-
-                const total = completedJobs.reduce(
-                    (sum, job) => sum + (job.price || 0),
-                    0
-                );
-
-                setEarnings(total);
-            }
-        });
-
-        return () => unsubscribe();
-    }, []);
-
-    // ✅ ACCEPT REQUEST
-    const acceptRequest = async (req) => {
-        try {
-            const user = auth.currentUser;
-
-            if (activeJob) {
-                alert("Finish current job first 🚧");
+        const unsubscribeAuth = auth.onAuthStateChanged((user) => {
+            if (!user) {
+                setLoading(false);
                 return;
             }
 
-            await updateDoc(doc(db, "requests", req.id), {
-                status: "accepted",
-                mechanicId: user.uid,
+            const q = query(
+                collection(db, "requests"),
+                where("mechanicEmail", "==", user.email),
+                orderBy("createdAt", "desc")
+            );
+
+            unsubscribeSnapshot = onSnapshot(q, (snapshot) => {
+                const data = snapshot.docs.map((doc) => ({
+                    id: doc.id,
+                    ...doc.data(),
+                }));
+                setRequests(data);
+                setLoading(false);
             });
+        });
 
-            setActiveJob({ ...req, mechanicId: user.uid });
-        } catch (error) {
-            console.error(error);
-        }
-    };
+        return () => {
+            if (unsubscribeSnapshot) unsubscribeSnapshot();
+            unsubscribeAuth();
+        };
+    }, []);
 
-    // ❌ REJECT
-    const rejectRequest = async (id) => {
+    // 🔥 SAFE STATUS UPDATE (PRO)
+    const updateStatus = async (id, newStatus) => {
         try {
-            await updateDoc(doc(db, "requests", id), {
-                status: "rejected",
-            });
-        } catch (error) {
-            console.error(error);
-        }
-    };
+            setUpdatingId(id);
 
-    // ✅ COMPLETE JOB
-    const completeJob = async () => {
-        if (!activeJob) return;
+            const ref = doc(db, "requests", id);
+            const snap = await getDoc(ref);
 
-        try {
-            await updateDoc(doc(db, "requests", activeJob.id), {
-                status: "completed",
-            });
+            if (!snap.exists()) return;
 
-            setActiveJob(null);
-        } catch (error) {
-            console.error(error);
-        }
-    };
+            const currentData = snap.data();
 
-    // 💳 MARK AS PAID
-    const markAsPaid = async () => {
-        if (!activeJob) return;
+            // 🚫 Prevent multiple accepts
+            if (
+                currentData.status === "accepted" &&
+                newStatus === "accepted"
+            ) {
+                alert("Already accepted by another mechanic");
+                return;
+            }
 
-        try {
-            await updateDoc(doc(db, "requests", activeJob.id), {
-                paymentStatus: "paid",
-            });
+            let updateData = { status: newStatus };
+
+            // 🔥 Add timestamps
+            if (newStatus === "accepted") {
+                updateData.acceptedAt = new Date();
+            }
+
+            if (newStatus === "completed") {
+                updateData.completedAt = new Date();
+            }
+
+            await updateDoc(ref, updateData);
         } catch (err) {
             console.error(err);
+            alert("Something went wrong");
+        } finally {
+            setUpdatingId(null);
         }
     };
+
+    // 🔥 LOADING UI
+    if (loading) {
+        return (
+            <div className="min-h-screen flex items-center justify-center bg-black text-white">
+                <p className="text-xl animate-pulse">Loading dashboard...</p>
+            </div>
+        );
+    }
 
     return (
         <div className="min-h-screen bg-gradient-to-br from-black via-gray-900 to-gray-800 text-white p-6">
 
             {/* HEADER */}
-            <h1 className="text-4xl font-bold text-center mb-6">
-                🔧 Mechanic Dashboard
-            </h1>
+            <div className="flex justify-between items-center mb-8">
+                <h1 className="text-4xl font-bold">🔧 Mechanic Dashboard</h1>
 
-            {/* 🔥 ACTIVE JOB */}
-            {activeJob && (
-                <div className="mb-8 p-6 rounded-2xl bg-gradient-to-r from-green-500 to-emerald-600 shadow-lg">
-                    <h2 className="text-2xl font-bold mb-2">🚗 Active Job</h2>
-
-                    <p>
-                        <strong>🛠 Service:</strong>{" "}
-                        {activeJob.serviceType?.toUpperCase()}
-                    </p>
-
-                    <p>
-                        <strong>📍 Location:</strong>{" "}
-                        {activeJob.location || "Unknown"}
-                    </p>
-
-                    <p>
-                        <strong>📧 User:</strong> {activeJob.email}
-                    </p>
-
-                    <p className="mt-2">
-                        💰 Price: ₹{activeJob.price}
-                    </p>
-
-                    <p>
-                        💳 Payment: {activeJob.paymentStatus?.toUpperCase()}
-                    </p>
-
-                    <div className="flex gap-4 mt-4">
-                        <button
-                            className="px-6 py-3 bg-black text-white rounded-lg hover:scale-105 transition"
-                            onClick={completeJob}
-                        >
-                            Complete ✅
-                        </button>
-
-                        {activeJob.paymentStatus !== "paid" && (
-                            <button
-                                onClick={markAsPaid}
-                                className="px-6 py-3 bg-yellow-400 text-black rounded-lg hover:scale-105 transition"
-                            >
-                                Mark Paid 💳
-                            </button>
-                        )}
-                    </div>
-                </div>
-            )}
-
-            {/* REQUEST LIST */}
-            <h2 className="text-2xl font-semibold mb-4">📥 Incoming Requests</h2>
-
-            {requests.length === 0 ? (
-                <p className="text-gray-400 text-center">
-                    No requests available
-                </p>
-            ) : (
-                <div className="grid gap-6">
-                    {requests.map((req) => (
-                        <div
-                            key={req.id}
-                            className="p-6 rounded-2xl bg-white/10 backdrop-blur-lg border border-white/20 shadow-lg flex flex-col md:flex-row justify-between items-center"
-                        >
-                            <div>
-                                <h3 className="text-xl font-bold">
-                                    🚨 {req.serviceType?.toUpperCase()} Service
-                                </h3>
-
-                                <p className="text-gray-300">
-                                    📍 {req.location || "Unknown"}
-                                </p>
-
-                                <p className="text-gray-400">
-                                    📧 {req.email}
-                                </p>
-
-                                <p className="text-yellow-400">
-                                    💰 ₹{req.price}
-                                </p>
-
-                                <p className="text-yellow-400 font-semibold">
-                                    Status: {req.status.toUpperCase()}
-                                </p>
-                            </div>
-
-                            <div className="flex gap-4 mt-4 md:mt-0">
-                                <button
-                                    onClick={() => acceptRequest(req)}
-                                    disabled={!!activeJob}
-                                    className={`px-6 py-3 rounded-lg text-white font-semibold ${activeJob
-                                            ? "bg-gray-500"
-                                            : "bg-green-500 hover:scale-105"
-                                        }`}
-                                >
-                                    Accept ✅
-                                </button>
-
-                                <button
-                                    onClick={() => rejectRequest(req.id)}
-                                    className="px-6 py-3 bg-red-500 rounded-lg text-white font-semibold hover:scale-105"
-                                >
-                                    Reject ❌
-                                </button>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            )}
-
-            {/* 💰 REAL EARNINGS */}
-            <div className="mt-10 p-6 rounded-2xl bg-gradient-to-r from-yellow-400 to-orange-500 shadow-lg text-black">
-                <h2 className="text-2xl font-bold">💰 Earnings</h2>
-                <p className="text-lg">Total Earnings: ₹{earnings}</p>
+                <span className="text-sm text-gray-400">
+                    Total Requests: {requests.length}
+                </span>
             </div>
 
+            {/* EMPTY */}
+            {requests.length === 0 && (
+                <div className="text-center mt-32 text-gray-400">
+                    <p className="text-lg">No requests assigned yet 🚀</p>
+                </div>
+            )}
+
+            {/* LIST */}
+            <div className="grid md:grid-cols-2 gap-6">
+                {requests.map((r) => (
+                    <div
+                        key={r.id}
+                        className="p-6 rounded-2xl bg-white/10 backdrop-blur-xl border border-white/20 shadow-xl hover:shadow-2xl hover:scale-[1.02] transition duration-300"
+                    >
+                        {/* SERVICE */}
+                        <div className="flex items-center gap-2 mb-3 text-lg">
+                            <Wrench size={20} />
+                            <p className="font-semibold">
+                                {r.serviceType || "General Service"}
+                            </p>
+                        </div>
+
+                        {/* DETAILS */}
+                        <p className="text-sm text-gray-300">
+                            <b>Customer:</b> {r.customerEmail || "Unknown"}
+                        </p>
+
+                        <p className="text-sm text-gray-300">
+                            <b>Price:</b> ₹{r.price || 0}
+                        </p>
+
+                        <div className="flex items-center gap-2 text-sm text-gray-300 mt-1">
+                            <MapPin size={16} />
+                            {r.location || "📍 Location not available"}
+                        </div>
+
+                        {/* STATUS */}
+                        <div className="mt-3">
+                            <span
+                                className={`px-3 py-1 rounded-full text-sm font-semibold
+                ${r.status === "pending"
+                                        ? "bg-yellow-500/20 text-yellow-400"
+                                        : r.status === "accepted"
+                                            ? "bg-blue-500/20 text-blue-400"
+                                            : r.status === "completed"
+                                                ? "bg-green-500/20 text-green-400"
+                                                : "bg-red-500/20 text-red-400"
+                                    }`}
+                            >
+                                {r.status?.toUpperCase() || "PENDING"}
+                            </span>
+                        </div>
+
+                        {/* ACTIONS */}
+                        <div className="mt-5 flex gap-3 flex-wrap">
+
+                            {r.status === "pending" && (
+                                <>
+                                    <button
+                                        disabled={updatingId === r.id}
+                                        onClick={() => updateStatus(r.id, "accepted")}
+                                        className="flex items-center gap-2 bg-green-600 px-4 py-2 rounded-lg hover:bg-green-700 transition disabled:opacity-50"
+                                    >
+                                        <CheckCircle size={16} />
+                                        Accept
+                                    </button>
+
+                                    <button
+                                        disabled={updatingId === r.id}
+                                        onClick={() => updateStatus(r.id, "rejected")}
+                                        className="flex items-center gap-2 bg-red-600 px-4 py-2 rounded-lg hover:bg-red-700 transition disabled:opacity-50"
+                                    >
+                                        <XCircle size={16} />
+                                        Reject
+                                    </button>
+                                </>
+                            )}
+
+                            {r.status === "accepted" && (
+                                <button
+                                    disabled={updatingId === r.id}
+                                    onClick={() => updateStatus(r.id, "completed")}
+                                    className="bg-blue-600 px-4 py-2 rounded-lg hover:bg-blue-700 transition disabled:opacity-50"
+                                >
+                                    Mark Completed
+                                </button>
+                            )}
+
+                            {r.status === "completed" && (
+                                <span className="text-green-400 font-semibold">
+                                    ✅ Completed
+                                </span>
+                            )}
+
+                            {r.status === "rejected" && (
+                                <span className="text-red-400 font-semibold">
+                                    ❌ Rejected
+                                </span>
+                            )}
+                        </div>
+                    </div>
+                ))}
+            </div>
         </div>
     );
 }

@@ -1,7 +1,13 @@
+// firebase.js
+
 import { initializeApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider } from "firebase/auth";
+import {
+    getAuth,
+    GoogleAuthProvider
+} from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 
+// 🔐 Use environment variables (IMPORTANT for security)
 const firebaseConfig = {
     apiKey: "AIzaSyB-1GGmt4yuYvmjvIx3q1lnEh8w1igYujA",
     authDomain: "vehicle-assistance-app-b006e.firebaseapp.com",
@@ -12,15 +18,20 @@ const firebaseConfig = {
     measurementId: "G-BYC34F0BNH"
 };
 
-// 🔥 Initialize
+// 🚀 Initialize app
 const app = initializeApp(firebaseConfig);
 
-// 🔐 Auth
-const auth = getAuth(app);
-const googleProvider = new GoogleAuthProvider();
+// 🔑 Auth
+export const auth = getAuth(app);
+
+// 🌐 Google Provider (customized)
+export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({
+    prompt: "select_account"
+});
 
 // 🗄️ Firestore
-const db = getFirestore(app);
+export const db = getFirestore(app);
 
-// ✅ EXPORT ONLY
-export { auth, db, app, googleProvider };
+// (optional export)
+export default app;
